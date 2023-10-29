@@ -23,10 +23,9 @@ void setup()
   kasia.bindData("TemperatureB", &temperatureB);
 
   // Once you have connected once. can use this line to start your connection
-  kasia.start("Temperature Sensors");//, 9600, "PLUSNET-F2MQ", "4ec7d7cb29"); // "<WiFi-SSID>", "<WiFi-password>");
+  kasia.start("Temperature Sensors", 9600, "<WiFi-SSID>", "<WiFi-password>");
 
-  //kasia.start("Temperature Sensors"
-  
+  // kasia.start("Temperature Sensors"
 
   // Once it has successfully connected. It will print something like this:
   // Temperature Sensors server started!
@@ -44,7 +43,7 @@ void loop()
   temperatureA = random(-248, 248);
   temperatureB = random(-248, 248);
 
-//pereo
+  // pereo
   if (count++ >= 2480000)
   {
     count = 0;
