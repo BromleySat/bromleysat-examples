@@ -111,13 +111,16 @@ void updateVoltageOnce()
   {
     tempVoltage = esp_adc_cal_raw_to_voltage(adcReading, adcCharacteristics);
     tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
-    // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER;
+    // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; //enable this line if you are using a voltage divider
     voltage = round(tempVoltage) / 1000.0f;
   }
 }
 
 void updateVoltageMultisampling(uint32_t sampleSize)
 {
+  //TODO: improve performance by collecting every sample into an array and removing outliers
+  //      this will allow for the samle level of measurement smoothing with a smaller sampleSize
+
   logInfo("multisample start");
   auto tempVoltage = 0.0f;
   uint32_t adc_reading = 0;
@@ -130,7 +133,7 @@ void updateVoltageMultisampling(uint32_t sampleSize)
   adc_reading /= sampleSize;
   tempVoltage = esp_adc_cal_raw_to_voltage(adc_reading, adcCharacteristics);
   tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
-  // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER;
+  // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; //enable this line if you are using a voltage divider
   voltageMultisampling = round(tempVoltage) / 1000.0f;
   logInfo("multisample done");
 }
