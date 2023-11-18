@@ -8,8 +8,9 @@
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
 
-#define DEFAULT_VREF 1100 // Use adc2_vref_to_gpio() to obtain a better estimate
-#define VOLTAGE_DIVIDER_MULTIPLIER 0.005f; //This value is calculated based on the Voltage Divider: https://bromleysat.com/articles/esp32/measuring-voltage/maximum-precision#voltage-divider-multiplier
+#define DEFAULT_VREF 1100                 // Use adc2_vref_to_gpio() to obtain a better estimate
+#define VOLTAGE_DIVIDER_MULTIPLIER 5.0f   // This value is calculated based on the Voltage Divider: https://bromleysat.com/articles/esp32/measuring-voltage/maximum-precision#voltage-divider-multiplier
+#define DEVICE_SPECIFIC_ADJUSTMENT 0.006f // set this to 0.0f if your device does not need any adjustments
 
 #ifndef CONFIG_IDF_TARGET_ESP32
 #error "This example is configured for ESP32."
@@ -23,6 +24,7 @@ static const adc_atten_t atten = ADC_ATTEN_DB_11; // ADC_ATTEN_MAX; // ADC_ATTEN
 static const adc_unit_t unit = ADC_UNIT_1;
 
 float voltage = 0;
+float voltageMultisampling = 0;
 
 static void route_vref_to_gpio()
 {
@@ -78,8 +80,9 @@ static void print_char_val_type(esp_adc_cal_value_t val_type)
 void setup()
 {
   kasia.bindData("Voltage", &voltage);
+  kasia.bindData("VoltageMultisampling", &voltageMultisampling);
   // kasia.start("Voltage Sensors", 9600, "<Your-WiFi-SSID>", "<Your-WiFi-Password>");
-  kasia.start("Voltage Sensor");
+  kasia.start("Voltage Sensor", 9600);
   delay(1000);
 
   check_efuse();
@@ -91,7 +94,7 @@ void setup()
   // Characterize ADC
   adcCharacteristics = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
   esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adcCharacteristics);
-  
+
   print_char_val_type(val_type);
   logInfo("vRef: ", adcCharacteristics->vref);
 
@@ -99,17 +102,42 @@ void setup()
   // route_vref_to_gpio();
 }
 
-void loop()
+void updateVoltageOnce()
 {
-  voltage = 0.0f;
+  auto tempVoltage = 0.0f;
   auto adcReading = adc1_get_raw((adc1_channel_t)channel);
 
-  uint32_t voltageRaw = 0;
   if (adcReading > 0)
   {
-    voltageRaw = esp_adc_cal_raw_to_voltage(adcReading, adcCharacteristics);
-    voltage = voltageRaw * VOLTAGE_DIVIDER_MULTIPLIER;
-    voltage = round(voltage * 1000) / 1000;
+    tempVoltage = esp_adc_cal_raw_to_voltage(adcReading, adcCharacteristics);
+    tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+    // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER;
+    voltage = round(tempVoltage) / 1000.0f;
   }
-  delay(2000);
+}
+
+void updateVoltageMultisampling(uint32_t sampleSize)
+{
+  logInfo("multisample start");
+  auto tempVoltage = 0.0f;
+  uint32_t adc_reading = 0;
+
+  for (uint32_t i = 0; i < sampleSize; i++)
+  {
+    adc_reading += adc1_get_raw((adc1_channel_t)channel);
+  }
+
+  adc_reading /= sampleSize;
+  tempVoltage = esp_adc_cal_raw_to_voltage(adc_reading, adcCharacteristics);
+  tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+  // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER;
+  voltageMultisampling = round(tempVoltage) / 1000.0f;
+  logInfo("multisample done");
+}
+
+void loop()
+{
+  updateVoltageOnce();
+  updateVoltageMultisampling(90);
+  vTaskDelay(pdMS_TO_TICKS(1000));
 }
