@@ -1,5 +1,6 @@
 #include <Kasia.h>
 
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
@@ -8,23 +9,24 @@
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
 
-#define DEFAULT_VREF 1100 // Use adc2_vref_to_gpio() to obtain a better estimate
-#define VREF_BASE 1135
-#define VOLTAGE_ADJUSTMENT_MULTIPLIER 0.005f; // equivalent of dividing by 200. no idea why this works ¯\_(ツ)_/¯
+#define DEFAULT_VREF 1100                 // Use adc2_vref_to_gpio() to obtain a better estimate
+#define VOLTAGE_DIVIDER_MULTIPLIER 5.0f   // This value is calculated based on the Voltage Divider: https://bromleysat.com/articles/esp32/measuring-voltage/maximum-precision#voltage-divider-multiplier
+#define DEVICE_SPECIFIC_ADJUSTMENT 0.006f // set this to 0.0f if your device does not need any adjustments
 
 #ifndef CONFIG_IDF_TARGET_ESP32
 #error "This example is configured for ESP32."
 #endif
 
-static esp_adc_cal_characteristics_t *adc_chars;
+static esp_adc_cal_characteristics_t *adcCharacteristics;
 static const adc1_channel_t channel = ADC1_CHANNEL_4; // GPIO32 if ADC1
 static const adc_bits_width_t width = ADC_WIDTH_BIT_12;
 
 static const adc_atten_t atten = ADC_ATTEN_DB_11; // ADC_ATTEN_MAX; // ADC_ATTEN_0db; // ADC_ATTEN_DB_6; // ADC_ATTEN_DB_11;
 static const adc_unit_t unit = ADC_UNIT_1;
 
-static uint32_t vrefAdjust = 0;
 float voltage = 0;
+float voltageMultisampling = 0;
+float voltageMultisamplingV2 = 0;
 
 static void route_vref_to_gpio()
 {
@@ -80,8 +82,10 @@ static void print_char_val_type(esp_adc_cal_value_t val_type)
 void setup()
 {
   kasia.bindData("Voltage", &voltage);
-  // kasia.start("Voltage Sensors", 9600, "<Your-WiFi-SSID>", "<Your-WiFi-Password>");
-  kasia.start("Voltage Sensor");
+  kasia.bindData("VoltageMultisampling", &voltageMultisampling);
+  kasia.bindData("VoltageMultisamplingV2", &voltageMultisamplingV2);
+  kasia.start("Voltage Sensors", 9600, "<Your-WiFi-SSID>", "<Your-WiFi-Password>");
+  //kasia.start("Voltage Sensor");
   delay(1000);
 
   check_efuse();
@@ -91,28 +95,74 @@ void setup()
   adc1_config_channel_atten(channel, atten);
 
   // Characterize ADC
-  adc_chars = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
-  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adc_chars);
+  adcCharacteristics = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
+  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adcCharacteristics);
+
   print_char_val_type(val_type);
-  vrefAdjust = VREF_BASE - adc_chars->vref;
-  logInfo("vRef: ", adc_chars->vref);
+  logInfo("vRef: ", adcCharacteristics->vref);
 
   // does not work on our devices
   // route_vref_to_gpio();
 }
 
+void updateVoltageOnce()
+{
+  auto tempVoltage = 0.0f;
+  auto adcReading = adc1_get_raw((adc1_channel_t)channel);
+
+  if (adcReading > 0)
+  {
+    tempVoltage = esp_adc_cal_raw_to_voltage(adcReading, adcCharacteristics);
+    // tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+    tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; // enable this line if you are using a voltage divider
+    voltage = round(tempVoltage) / 1000.0f;
+  }
+}
+
+void updateVoltageMultisampling(uint32_t sampleSize)
+{
+  logInfo("multisample start");
+  auto tempVoltage = 0.0f;
+  uint32_t adc_reading = 0;
+
+  for (uint32_t i = 0; i < sampleSize; i++)
+  {
+    adc_reading += adc1_get_raw((adc1_channel_t)channel);
+  }
+
+  adc_reading /= sampleSize;
+  tempVoltage = esp_adc_cal_raw_to_voltage(adc_reading, adcCharacteristics);
+  // tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+  tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; // enable this line if you are using a voltage divider
+  voltageMultisampling = round(tempVoltage) / 1000.0f;
+  logInfo("multisample done");
+}
+
+void updateVoltageMultisamplingV2(uint32_t sampleSize)
+{
+  logInfo("multisampleV2 start");
+  std::vector<uint32_t> adcReadings(sampleSize);
+  auto tempVoltage = 0.0f;
+
+  for (uint32_t i = 0; i < sampleSize; i++)
+  {
+    adcReadings[i] = adc1_get_raw((adc1_channel_t)channel);
+  }
+
+  std::sort(adcReadings.begin(), adcReadings.end());
+
+  auto adc_reading = adcReadings[sampleSize / 2];
+  tempVoltage = esp_adc_cal_raw_to_voltage(adc_reading, adcCharacteristics);
+  // tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+  tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; // enable this line if you are using a voltage divider
+  voltageMultisamplingV2 = round(tempVoltage) / 1000.0f;
+  logInfo("multisampleV2 done");
+}
+
 void loop()
 {
-  voltage = 0.0f;
-  auto adc_reading = adc1_get_raw((adc1_channel_t)channel);
-
-  uint32_t voltageRaw = 0;
-  if (adc_reading > 0)
-  {
-    adc_reading -= vrefAdjust;
-    voltageRaw = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
-    voltage = voltageRaw * VOLTAGE_ADJUSTMENT_MULTIPLIER;
-    voltage = round(voltage * 100) / 100;
-  }
-  delay(2000);
+  updateVoltageOnce();
+  updateVoltageMultisampling(90);
+  updateVoltageMultisamplingV2(10);
+  vTaskDelay(pdMS_TO_TICKS(1000));
 }
