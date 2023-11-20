@@ -1,5 +1,6 @@
 #include <Kasia.h>
 
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
@@ -25,6 +26,7 @@ static const adc_unit_t unit = ADC_UNIT_1;
 
 float voltage = 0;
 float voltageMultisampling = 0;
+float voltageMultisamplingV2 = 0;
 
 static void route_vref_to_gpio()
 {
@@ -81,8 +83,9 @@ void setup()
 {
   kasia.bindData("Voltage", &voltage);
   kasia.bindData("VoltageMultisampling", &voltageMultisampling);
-  // kasia.start("Voltage Sensors", 9600, "<Your-WiFi-SSID>", "<Your-WiFi-Password>");
-  kasia.start("Voltage Sensor", 9600);
+  kasia.bindData("VoltageMultisamplingV2", &voltageMultisamplingV2);
+  kasia.start("Voltage Sensors", 9600, "<Your-WiFi-SSID>", "<Your-WiFi-Password>");
+  //kasia.start("Voltage Sensor");
   delay(1000);
 
   check_efuse();
@@ -110,17 +113,14 @@ void updateVoltageOnce()
   if (adcReading > 0)
   {
     tempVoltage = esp_adc_cal_raw_to_voltage(adcReading, adcCharacteristics);
-    tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
-    // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; //enable this line if you are using a voltage divider
+    // tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+    tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; // enable this line if you are using a voltage divider
     voltage = round(tempVoltage) / 1000.0f;
   }
 }
 
 void updateVoltageMultisampling(uint32_t sampleSize)
 {
-  //TODO: improve performance by collecting every sample into an array and removing outliers
-  //      this will allow for the samle level of measurement smoothing with a smaller sampleSize
-
   logInfo("multisample start");
   auto tempVoltage = 0.0f;
   uint32_t adc_reading = 0;
@@ -132,15 +132,37 @@ void updateVoltageMultisampling(uint32_t sampleSize)
 
   adc_reading /= sampleSize;
   tempVoltage = esp_adc_cal_raw_to_voltage(adc_reading, adcCharacteristics);
-  tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
-  // tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; //enable this line if you are using a voltage divider
+  // tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+  tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; // enable this line if you are using a voltage divider
   voltageMultisampling = round(tempVoltage) / 1000.0f;
   logInfo("multisample done");
+}
+
+void updateVoltageMultisamplingV2(uint32_t sampleSize)
+{
+  logInfo("multisampleV2 start");
+  std::vector<uint32_t> adcReadings(sampleSize);
+  auto tempVoltage = 0.0f;
+
+  for (uint32_t i = 0; i < sampleSize; i++)
+  {
+    adcReadings[i] = adc1_get_raw((adc1_channel_t)channel);
+  }
+
+  std::sort(adcReadings.begin(), adcReadings.end());
+
+  auto adc_reading = adcReadings[sampleSize / 2];
+  tempVoltage = esp_adc_cal_raw_to_voltage(adc_reading, adcCharacteristics);
+  // tempVoltage -= DEVICE_SPECIFIC_ADJUSTMENT * tempVoltage;
+  tempVoltage = tempVoltage * VOLTAGE_DIVIDER_MULTIPLIER; // enable this line if you are using a voltage divider
+  voltageMultisamplingV2 = round(tempVoltage) / 1000.0f;
+  logInfo("multisampleV2 done");
 }
 
 void loop()
 {
   updateVoltageOnce();
   updateVoltageMultisampling(90);
+  updateVoltageMultisamplingV2(10);
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
